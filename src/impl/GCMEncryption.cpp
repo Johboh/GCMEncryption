@@ -39,7 +39,8 @@ const std::vector<uint8_t> GCMEncryption::encrypt(const void *input_message, con
 
   size_t length_field_size = _extended_size ? sizeof(uint16_t) : sizeof(uint8_t);
   size_t length_field_max_value = _extended_size ? __UINT16_MAX__ : __UINT8_MAX__;
-  auto remaining_allowed_size_for_payload = (length_field_max_value - sizeof(GCMEncryptionHeader) - length_field_size);
+  auto remaining_allowed_size_for_payload =
+      (length_field_max_value - sizeof(GCMEncryptionHeader) - length_field_size - SECRET_LENGTH);
   if (input_length > remaining_allowed_size_for_payload) {
     ESP_LOGE(GCMEncryptionLog::TAG, "Input length %d exceedes max allowed payload size %d", input_length,
              remaining_allowed_size_for_payload);
@@ -95,7 +96,7 @@ const std::vector<uint8_t> GCMEncryption::encrypt(const void *input_message, con
 
 const std::vector<uint8_t> GCMEncryption::decrypt(const std::vector<uint8_t> &input_message) {
   size_t length_field_size = _extended_size ? sizeof(uint16_t) : sizeof(uint8_t);
-  auto minimum_expected_payload_size = sizeof(GCMEncryptionHeader) - length_field_size;
+  auto minimum_expected_payload_size = sizeof(GCMEncryptionHeader) + length_field_size + SECRET_LENGTH;
 
   if (input_message.size() < minimum_expected_payload_size) {
     ESP_LOGE(GCMEncryptionLog::TAG, "Input payload length is too short");
@@ -110,7 +111,7 @@ const std::vector<uint8_t> GCMEncryption::decrypt(const void *input_message) {
 
   // If we have no secret, something is off. No point in continue at all in that case.
   // Or if we ONLY have a secret. Its technically valid, but also off.
-  auto payload_length_start = input_message + sizeof(GCMEncryptionHeader);
+  auto payload_length_start = static_cast<const uint8_t *>(input_message) + sizeof(GCMEncryptionHeader);
   size_t payload_length = 0;
   if (_extended_size) {
     payload_length = *((uint16_t *)payload_length_start);
