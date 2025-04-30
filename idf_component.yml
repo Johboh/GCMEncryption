@@ -1,0 +1,5 @@
+version: "1.0.0"
+description: Encrypt and decrypt payload using GCM.
+url: https://github.com/Johboh/GCMEncryption
+dependencies:
+  idf: ">=4.4"

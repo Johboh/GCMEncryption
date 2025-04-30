@@ -1,0 +1,35 @@
+{
+  "name": "GCMEncryption",
+  "keywords": "esp32, esp-now, ESP Now, now",
+  "description": "Encrypt and decrypt payload using GCM.",
+  "$schema": "https://raw.githubusercontent.com/platformio/platformio-core/develop/platformio/assets/schema/library.json",
+  "authors":
+  {
+    "name": "Johan Böhlin"
+  },
+  "version": "1.0.3",
+  "license": "GPL-3.0-or-later",
+  "repository":
+  {
+    "type": "git",
+    "url": "https://github.com/Johboh/GCMEncryption.git"
+  },
+  "build": {
+      "libLDFMode": "deep"
+  },
+  "frameworks": ["espidf", "arduino"],
+  "platforms": ["espressif32"],
+  "examples": [
+    {
+      "name": "Arduino",
+      "base": "examples/arduino/integration",
+      "files": ["integration.ino"]
+    },
+    {
+      "name": "ESP-IDF",
+      "base": "examples/espidf/integration/main",
+      "files": ["main.cpp"]
+    }
+  ],
+  "dependencies": []
+}
