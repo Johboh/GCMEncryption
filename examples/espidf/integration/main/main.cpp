@@ -1,4 +1,5 @@
 #include <GCMEncryption.h>
+#include <esp_log.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <string>
@@ -22,7 +23,7 @@ void app_main(void) {
   auto encrypted = _gcm_encryption.encrypt(message.c_str(), message.size());
   auto decrypted = _gcm_encryption.decrypt(encrypted);
   std::string result(decrypted.begin(), decrypted.end());
-  ESP_LOGE("main", "GCM encrypt decrypt result: %s", result.c_str());
+  ESP_LOGI("main", "GCM encrypt decrypt result: %s", result.c_str());
 
   while (1) {
     vTaskDelay(500 / portTICK_PERIOD_MS);
