@@ -1,4 +1,4 @@
-name: Push EspNowNetworkShared to PlatformIO registry
+name: Push GCMEncryption to PlatformIO registry
 on:
   release:
     types: [created]
