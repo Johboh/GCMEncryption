@@ -30,14 +30,19 @@ public:
 
 public:
   /**
-   * @brief Encrypt an array.
-   * This array will be encryped and placed after an Encryption Header.
+   * @brief Encrypt a message.
+   * This function encrypts the provided message and appends it after an encryption header.
    *
-   * @param message pointer to the message to encrypt.
-   * @param length size of the message. Maximum supported message length is 65510 bytes if extended_size is true in
-   * constructor, else if false, 231 bytes.
-   * @return the encrypted message. This will be larger then the original message. Empty vector on failure. The
-   * encryption overhead is 26 bytes when extended_size is true, and 25 bytes for when extended_size is false.
+   * @param message Pointer to the message to encrypt.
+   * @param length Size of the message in bytes. The maximum supported message length is 65510 bytes if `extended_size`
+   * is set to true in the constructor, or 231 bytes if `extended_size` is false.
+   * @return A vector containing the encrypted message. This will be larger than the original message due to the added
+   * encryption header and other metadata. Returns an empty vector on failure.
+   *
+   * @note The minimal size of the encrypted vector is 33 bytes when `extended_size` is true, and 32 bytes when
+   * `extended_size` is false. If the message length is between 0 and 8 bytes, the encrypted vector size will remain
+   * at this minimal size. Starting from a message length of 9 bytes, the encrypted vector size will increase linearly
+   * with the input message length.
    */
   const std::vector<uint8_t> encrypt(const void *message, const size_t length);
 
