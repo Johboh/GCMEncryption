@@ -39,7 +39,7 @@ public:
    * @return A vector containing the encrypted message. This will be larger than the original message due to the added
    * encryption header and other metadata. Returns an empty vector on failure.
    *
-   * @note The minimal size of the encrypted vector is 33 bytes when `extended_size` is true, and 32 bytes when
+   * @note The minimal size of the encrypted vector is 34 bytes when `extended_size` is true, and 33 bytes when
    * `extended_size` is false. If the message length is between 0 and 8 bytes, the encrypted vector size will remain
    * at this minimal size. Starting from a message length of 9 bytes, the encrypted vector size will increase linearly
    * with the input message length.
