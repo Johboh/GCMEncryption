@@ -2,7 +2,7 @@ FILE(GLOB_RECURSE sources "./src/impl/*.*")
 
 set(required_components mbedtls)
 
-idf_component_register(COMPONENT_NAME "esp_now_network_shared"
+idf_component_register(COMPONENT_NAME "gcmencryption"
                         SRCS ${sources}
                         INCLUDE_DIRS "./src/"
                         REQUIRES ${required_components})
