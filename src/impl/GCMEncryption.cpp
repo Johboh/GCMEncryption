@@ -2,7 +2,6 @@
 #include <cstring>
 #include <esp_log.h>
 #include <esp_random.h>
-#include <mbedtls/gcm.h>
 
 #define KEY_SIZE_IN_BITS (16 * 8) // Assuming 16 bytes key size.
 #define SECRET_LENGTH 8           // Hardcoded to 8 bytes.
@@ -24,7 +23,12 @@ struct GCMEncryptionHeader {
 #pragma pack(0)
 
 GCMEncryption::GCMEncryption(const char *key, const char *secret, bool extended_size)
-    : _key(key), _secret(secret), _extended_size(extended_size) {}
+    : _secret(secret), _extended_size(extended_size) {
+  mbedtls_gcm_init(&_aes);
+  mbedtls_gcm_setkey(&_aes, MBEDTLS_CIPHER_ID_AES, (const unsigned char *)key, KEY_SIZE_IN_BITS);
+}
+
+GCMEncryption::~GCMEncryption() { mbedtls_gcm_free(&_aes); }
 
 const std::vector<uint8_t> GCMEncryption::encrypt(const void *input_message, const size_t input_length) {
   if (input_message == nullptr || input_length == 0) {
@@ -72,12 +76,8 @@ const std::vector<uint8_t> GCMEncryption::encrypt(const void *input_message, con
   std::memcpy(input.get(), _secret, SECRET_LENGTH);
   std::memcpy(input.get() + SECRET_LENGTH, input_message, input_length);
 
-  mbedtls_gcm_context aes;
-  mbedtls_gcm_init(&aes);
-  mbedtls_gcm_setkey(&aes, MBEDTLS_CIPHER_ID_AES, (const unsigned char *)_key, KEY_SIZE_IN_BITS);
-  mbedtls_gcm_crypt_and_tag(&aes, MBEDTLS_GCM_ENCRYPT, payload_length, header.iv, sizeof(header.iv), nullptr, 0,
+  mbedtls_gcm_crypt_and_tag(&_aes, MBEDTLS_GCM_ENCRYPT, payload_length, header.iv, sizeof(header.iv), nullptr, 0,
                             input.get(), encrypted.get(), sizeof(header.tag), header.tag);
-  mbedtls_gcm_free(&aes);
 
   // We now have or encrypted payload.
   // We want to send the outer GCMEncryptionHeader followed by the length and the encrypted payload.
@@ -131,12 +131,8 @@ const std::vector<uint8_t> GCMEncryption::decrypt(const void *input_message) {
   size_t length_field_size = _extended_size ? sizeof(uint16_t) : sizeof(uint8_t);
   uint8_t *encrypted = (uint8_t *)input_message + sizeof(GCMEncryptionHeader) + length_field_size;
 
-  mbedtls_gcm_context aes;
-  mbedtls_gcm_init(&aes);
-  mbedtls_gcm_setkey(&aes, MBEDTLS_CIPHER_ID_AES, (const unsigned char *)_key, KEY_SIZE_IN_BITS);
-  int r = mbedtls_gcm_crypt_and_tag(&aes, MBEDTLS_GCM_DECRYPT, payload_length, header->iv, sizeof(header->iv), nullptr,
+  int r = mbedtls_gcm_crypt_and_tag(&_aes, MBEDTLS_GCM_DECRYPT, payload_length, header->iv, sizeof(header->iv), nullptr,
                                     0, encrypted, decrypted.get(), sizeof(header->tag), header->tag);
-  mbedtls_gcm_free(&aes);
 
   if (r != 0) {
     ESP_LOGE(GCMEncryptionLog::TAG, "Failed to decrypt payload. Secret or keys are wrong");

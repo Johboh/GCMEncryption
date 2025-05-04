@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <esp_err.h>
+#include <mbedtls/gcm.h>
 #include <memory>
 #include <vector>
 
@@ -27,6 +28,7 @@ public:
    * existing users who expects the size to be 231 bytes.
    */
   GCMEncryption(const char *key, const char *secret, bool extended_size = false);
+  virtual ~GCMEncryption();
 
 public:
   /**
@@ -63,9 +65,9 @@ public:
   const std::vector<uint8_t> decrypt(const std::vector<uint8_t> &message);
 
 private:
-  const char *_key;
   const char *_secret;
   bool _extended_size;
+  mbedtls_gcm_context _aes;
 };
 
 #endif // __GCM_ENCRYPTION_H__
