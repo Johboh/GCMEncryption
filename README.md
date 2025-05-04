@@ -20,7 +20,7 @@ In your existing `idf_component.yml` or in a new `idf_component.yml` next to you
 ```
 dependencies:
   johboh/gcmencryption:
-    version: ">=0.2.0"
+    version: ">=0.2.1"
 ```
 
 #### Arduino IDE:
