@@ -9,7 +9,7 @@ Arduino (using Arduino IDE or PlatformIO) and ESP-IDF (using Espressif IoT Devel
 
 ### Installation
 #### PlatformIO (Arduino or ESP-IDF):
-Add the following to `libs_deps`:
+Add the following to `lib_deps`:
 ```
    Johboh/GCMEncryption
 ```
