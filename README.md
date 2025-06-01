@@ -8,15 +8,25 @@
 Arduino (using Arduino IDE or PlatformIO) and ESP-IDF (using Espressif IoT Development Framework or PlatformIO) compatible library for encrypting and decrypting messages to be sent over protocols like ESP-NOW, 802.15.4 and similar.
 
 ### Installation
-#### PlatformIO (Arduino or ESP-IDF):
+#### PlatformIO when using the Arduino framework:
 Add the following to `lib_deps`:
 ```
    Johboh/GCMEncryption
 ```
+
+#### PlatformIO when using the ESP-IDF framework:
+In your existing `idf_component.yml` or in a new `idf_component.yml` in your `src` or `main` folder:
+```
+dependencies:
+  johboh/gcmencryption:
+    version: ">=0.5.2"
+```
+
 #### Arduino IDE:
 Search for `GCMEncryption` by `johboh` in the library manager.
+
 #### Espressif IoT Development Framework:
-In your existing `idf_component.yml` or in a new `idf_component.yml` next to your main component:
+In your existing `idf_component.yml` or in a new `idf_component.yml` next to your `main` folder:
 ```
 dependencies:
   johboh/gcmencryption:
