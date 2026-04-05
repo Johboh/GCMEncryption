@@ -3,9 +3,15 @@
 
 #include <cstdint>
 #include <esp_err.h>
-#include <mbedtls/gcm.h>
+#include <esp_idf_version.h>
 #include <memory>
 #include <vector>
+
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(6, 0, 0)
+#include <mbedtls/esp_debug.h> // Weird, yes, don't know the correct include for 6.0.
+#else
+#include <mbedtls/gcm.h>
+#endif
 
 namespace GCMEncryptionLog {
 const char TAG[] = "GCMEncryption";
