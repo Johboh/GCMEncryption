@@ -1,5 +1,6 @@
 version: "0.5.3"
 description: Encrypt and decrypt payload using GCM.
 url: https://github.com/Johboh/GCMEncryption
+license: "GPL-3.0-or-later"
 dependencies:
   idf: ">=4.4"

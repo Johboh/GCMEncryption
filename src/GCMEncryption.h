@@ -1,3 +1,6 @@
+// Copyright (c) Johan Böhlin
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 #ifndef __GCM_ENCRYPTION_H__
 #define __GCM_ENCRYPTION_H__
 

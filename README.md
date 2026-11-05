@@ -42,3 +42,6 @@ Search for `GCMEncryption` by `johboh` in the library manager. See note about ve
 
 ### Compatibility
 - ESP32 only
+
+### License
+Licensed under the GNU General Public License v3.0 or later
