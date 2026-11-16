@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include <GCMEncryption.h>
+#include <algorithm>
 #include <cstring>
 #include <esp_log.h>
 #include <esp_random.h>
@@ -9,50 +10,91 @@
 #define KEY_SIZE_IN_BITS (16 * 8) // Assuming 16 bytes key size.
 #define SECRET_LENGTH 8           // Hardcoded to 8 bytes.
 
-#pragma pack(1)
+#pragma pack(push, 1)
 
 /**
- * This is the most outer message, encaplsulating all other messages that are sent.
- * Data after this message contains the encryped data.
+ * Compact header used when extended_size is false (wire-compatible with 0.x).
  */
 struct GCMEncryptionHeader {
   uint8_t iv[8];  // Random initialization vector.
   uint8_t tag[8]; // GCM authentication tag.
-  // Following here is either an uint8_t or uint16_t for size, depending on extended_size in constructor, describing the
-  // payload buffer length in bytes.
-  // The encrypted payload is appended after this struct, and is of length specified just earlier.
+  // Followed by uint8_t payload length and encrypted payload.
 };
 
-#pragma pack(0)
+/**
+ * Hardened header used when extended_size is true.
+ */
+struct GCMEncryptionExtendedHeader {
+  uint8_t iv[12];  // Random initialization vector (96-bit standard GCM nonce).
+  uint8_t tag[16]; // GCM authentication tag (128-bit full tag).
+  // Followed by uint16_t payload length and encrypted payload.
+};
+
+#pragma pack(pop)
+
+namespace {
+struct HeaderLayout {
+  size_t header_size;
+  size_t iv_size;
+  size_t tag_size;
+  size_t length_field_size;
+  size_t max_packet_size;
+};
+
+HeaderLayout getHeaderLayout(bool extended_size) {
+  if (extended_size) {
+    return {sizeof(GCMEncryptionExtendedHeader), sizeof(GCMEncryptionExtendedHeader::iv),
+            sizeof(GCMEncryptionExtendedHeader::tag), sizeof(uint16_t), UINT16_MAX};
+  }
+  return {sizeof(GCMEncryptionHeader), sizeof(GCMEncryptionHeader::iv), sizeof(GCMEncryptionHeader::tag),
+          sizeof(uint8_t), UINT8_MAX};
+}
+} // namespace
 
 GCMEncryption::GCMEncryption(const char *key, const char *secret, bool extended_size)
     : _secret(secret), _extended_size(extended_size) {
   mbedtls_gcm_init(&_aes);
-  mbedtls_gcm_setkey(&_aes, MBEDTLS_CIPHER_ID_AES, (const unsigned char *)key, KEY_SIZE_IN_BITS);
+  if (key == nullptr || secret == nullptr) {
+    ESP_LOGE(GCMEncryptionLog::TAG, "Key or secret is null");
+    return;
+  }
+  int r =
+      mbedtls_gcm_setkey(&_aes, MBEDTLS_CIPHER_ID_AES, reinterpret_cast<const unsigned char *>(key), KEY_SIZE_IN_BITS);
+  if (r != 0) {
+    ESP_LOGE(GCMEncryptionLog::TAG, "Failed to set GCM key (error %d)", r);
+    return;
+  }
+  _initialized = true;
 }
 
 GCMEncryption::~GCMEncryption() { mbedtls_gcm_free(&_aes); }
 
 const std::vector<uint8_t> GCMEncryption::encrypt(const void *input_message, const size_t input_length) {
+  if (!_initialized) {
+    ESP_LOGE(GCMEncryptionLog::TAG, "GCMEncryption is not initialized");
+    return std::vector<uint8_t>();
+  }
+
   if (input_message == nullptr || input_length == 0) {
     ESP_LOGE(GCMEncryptionLog::TAG,
              "Input payload is either null or length is zero. We need at least one byte to encrypt");
     return std::vector<uint8_t>();
   }
 
-  // Generate a random 8 bytes IV.
-  GCMEncryptionHeader header;
-  esp_fill_random(header.iv, sizeof(header.iv));
-
-  size_t length_field_size = _extended_size ? sizeof(uint16_t) : sizeof(uint8_t);
-  size_t length_field_max_value = _extended_size ? __UINT16_MAX__ : __UINT8_MAX__;
+  const HeaderLayout layout = getHeaderLayout(_extended_size);
   auto remaining_allowed_size_for_payload =
-      (length_field_max_value - sizeof(GCMEncryptionHeader) - length_field_size - SECRET_LENGTH);
+      (layout.max_packet_size - layout.header_size - layout.length_field_size - SECRET_LENGTH);
   if (input_length > remaining_allowed_size_for_payload) {
-    ESP_LOGE(GCMEncryptionLog::TAG, "Input length %d exceedes max allowed payload size %d", input_length,
+    ESP_LOGE(GCMEncryptionLog::TAG, "Input length %zu exceeds max allowed payload size %zu", input_length,
              remaining_allowed_size_for_payload);
     return std::vector<uint8_t>();
   }
+
+  // Generate a random IV.
+  uint8_t header[sizeof(GCMEncryptionExtendedHeader)]{};
+  uint8_t *iv = header;
+  uint8_t *tag = header + layout.iv_size;
+  esp_fill_random(iv, layout.iv_size);
 
   // Total buffer to encrypt needs to be at least 16 bytes.
   // At the start of the buffer, we will include the _secret so we can
@@ -62,7 +104,7 @@ const std::vector<uint8_t> GCMEncryption::encrypt(const void *input_message, con
   size_t total_length = SECRET_LENGTH + input_length;
   // We need at least 16 bytes, but we don't need a multiple of 16 bytes.
   // If smaller than 16, round up.
-  uint16_t payload_length = std::max((size_t)16, total_length);
+  uint16_t payload_length = std::max(static_cast<size_t>(16), total_length);
   std::unique_ptr<uint8_t[]> encrypted(new (std::nothrow) uint8_t[payload_length]);
   if (encrypted == nullptr) {
     ESP_LOGE(GCMEncryptionLog::TAG, "Failed to allocate memory for encryption buffer");
@@ -70,8 +112,8 @@ const std::vector<uint8_t> GCMEncryption::encrypt(const void *input_message, con
   }
 
   // Build the payload we want to encrypt by adding the secret first.
-  // Then add the actual message.
-  std::unique_ptr<uint8_t[]> input(new (std::nothrow) uint8_t[total_length]);
+  // Then add the actual message. Zero-initialize so any padding up to 16 bytes is deterministic.
+  std::unique_ptr<uint8_t[]> input(new (std::nothrow) uint8_t[payload_length]());
   if (input == nullptr) {
     ESP_LOGE(GCMEncryptionLog::TAG, "Failed to allocate memory for input buffer");
     return std::vector<uint8_t>();
@@ -79,50 +121,73 @@ const std::vector<uint8_t> GCMEncryption::encrypt(const void *input_message, con
   std::memcpy(input.get(), _secret, SECRET_LENGTH);
   std::memcpy(input.get() + SECRET_LENGTH, input_message, input_length);
 
-  mbedtls_gcm_crypt_and_tag(&_aes, MBEDTLS_GCM_ENCRYPT, payload_length, header.iv, sizeof(header.iv), nullptr, 0,
-                            input.get(), encrypted.get(), sizeof(header.tag), header.tag);
+  int r = mbedtls_gcm_crypt_and_tag(&_aes, MBEDTLS_GCM_ENCRYPT, payload_length, iv, layout.iv_size, nullptr, 0,
+                                    input.get(), encrypted.get(), layout.tag_size, tag);
+  if (r != 0) {
+    ESP_LOGE(GCMEncryptionLog::TAG, "Failed to encrypt payload (error %d)", r);
+    return std::vector<uint8_t>();
+  }
 
-  // We now have or encrypted payload.
-  // We want to send the outer GCMEncryptionHeader followed by the length and the encrypted payload.
-  size_t wire_length = sizeof(GCMEncryptionHeader) + payload_length + length_field_size;
+  // We now have our encrypted payload.
+  // We want to send the outer encryption header followed by the length and the encrypted payload.
+  size_t wire_length = layout.header_size + layout.length_field_size + payload_length;
   std::unique_ptr<uint8_t[]> wire_buffer(new (std::nothrow) uint8_t[wire_length]);
   if (wire_buffer == nullptr) {
     ESP_LOGE(GCMEncryptionLog::TAG, "Failed to allocate memory for wire buffer");
     return std::vector<uint8_t>();
   }
-  std::memcpy(wire_buffer.get(), &header, sizeof(GCMEncryptionHeader));
-  std::memcpy(wire_buffer.get() + sizeof(GCMEncryptionHeader), &payload_length, length_field_size);
-  std::memcpy(wire_buffer.get() + sizeof(GCMEncryptionHeader) + length_field_size, encrypted.get(), payload_length);
+  std::memcpy(wire_buffer.get(), header, layout.header_size);
+  std::memcpy(wire_buffer.get() + layout.header_size, &payload_length, layout.length_field_size);
+  std::memcpy(wire_buffer.get() + layout.header_size + layout.length_field_size, encrypted.get(), payload_length);
 
   return std::vector<uint8_t>(wire_buffer.get(), wire_buffer.get() + wire_length);
 }
 
 const std::vector<uint8_t> GCMEncryption::decrypt(const std::vector<uint8_t> &input_message) {
-  size_t length_field_size = _extended_size ? sizeof(uint16_t) : sizeof(uint8_t);
-  auto minimum_expected_payload_size = sizeof(GCMEncryptionHeader) + length_field_size + SECRET_LENGTH;
+  return decrypt(input_message.data(), input_message.size());
+}
 
-  if (input_message.size() < minimum_expected_payload_size) {
+const std::vector<uint8_t> GCMEncryption::decrypt(const void *input_message, const size_t input_length) {
+  if (!_initialized) {
+    ESP_LOGE(GCMEncryptionLog::TAG, "GCMEncryption is not initialized");
+    return std::vector<uint8_t>();
+  }
+
+  if (input_message == nullptr) {
+    ESP_LOGE(GCMEncryptionLog::TAG, "Input message is null");
+    return std::vector<uint8_t>();
+  }
+
+  const HeaderLayout layout = getHeaderLayout(_extended_size);
+  size_t header_and_length_size = layout.header_size + layout.length_field_size;
+  if (input_length < header_and_length_size + SECRET_LENGTH + 1) {
     ESP_LOGE(GCMEncryptionLog::TAG, "Input payload length is too short");
     return std::vector<uint8_t>();
   }
 
-  return decrypt(input_message.data());
-}
+  const uint8_t *message_bytes = static_cast<const uint8_t *>(input_message);
+  const uint8_t *iv = message_bytes;
+  const uint8_t *tag = message_bytes + layout.iv_size;
 
-const std::vector<uint8_t> GCMEncryption::decrypt(const void *input_message) {
-  GCMEncryptionHeader *header = (GCMEncryptionHeader *)input_message;
-
-  // If we have no secret, something is off. No point in continue at all in that case.
-  // Or if we ONLY have a secret. Its technically valid, but also off.
-  auto payload_length_start = static_cast<const uint8_t *>(input_message) + sizeof(GCMEncryptionHeader);
+  // If we have no secret, something is off. No point in continuing at all in that case.
+  // Or if we ONLY have a secret. It's technically valid, but also off.
+  const uint8_t *payload_length_start = message_bytes + layout.header_size;
   size_t payload_length = 0;
   if (_extended_size) {
-    payload_length = *((uint16_t *)payload_length_start);
+    uint16_t len = 0;
+    std::memcpy(&len, payload_length_start, sizeof(uint16_t));
+    payload_length = len;
   } else {
-    payload_length = *((uint8_t *)payload_length_start);
+    payload_length = *payload_length_start;
   }
+
   if (payload_length <= SECRET_LENGTH) {
     ESP_LOGE(GCMEncryptionLog::TAG, "Input payload length is too short");
+    return std::vector<uint8_t>();
+  }
+
+  if (payload_length > input_length - header_and_length_size) {
+    ESP_LOGE(GCMEncryptionLog::TAG, "Input payload length exceeds provided buffer size");
     return std::vector<uint8_t>();
   }
 
@@ -131,31 +196,25 @@ const std::vector<uint8_t> GCMEncryption::decrypt(const void *input_message) {
     ESP_LOGE(GCMEncryptionLog::TAG, "Failed to allocate memory for decryption buffer");
     return std::vector<uint8_t>();
   }
-  size_t length_field_size = _extended_size ? sizeof(uint16_t) : sizeof(uint8_t);
-  uint8_t *encrypted = (uint8_t *)input_message + sizeof(GCMEncryptionHeader) + length_field_size;
+  const uint8_t *encrypted = message_bytes + header_and_length_size;
 
-  int r = mbedtls_gcm_crypt_and_tag(&_aes, MBEDTLS_GCM_DECRYPT, payload_length, header->iv, sizeof(header->iv), nullptr,
-                                    0, encrypted, decrypted.get(), sizeof(header->tag), header->tag);
+  int r = mbedtls_gcm_auth_decrypt(&_aes, payload_length, iv, layout.iv_size, nullptr, 0, tag, layout.tag_size,
+                                   encrypted, decrypted.get());
 
   if (r != 0) {
-    ESP_LOGE(GCMEncryptionLog::TAG, "Failed to decrypt payload. Secret or keys are wrong");
+    ESP_LOGE(GCMEncryptionLog::TAG, "Failed to decrypt payload. Authentication tag or keys are invalid");
     return std::vector<uint8_t>();
   }
 
-  // Verify secret. Its always first.
-  if (memcmp(decrypted.get(), _secret, SECRET_LENGTH) != 0) {
+  // Verify secret in constant time. Its always first.
+  uint8_t diff = 0;
+  for (size_t i = 0; i < SECRET_LENGTH; i++) {
+    diff |= decrypted[i] ^ static_cast<uint8_t>(_secret[i]);
+  }
+  if (diff != 0) {
     ESP_LOGE(GCMEncryptionLog::TAG, "Failed to decrypt payload. Secret is invalid");
     return std::vector<uint8_t>();
   }
 
-  // Copy message without secret so we can return a pointer to something that can be free:d.
-  size_t output_message_length = payload_length - SECRET_LENGTH;
-  std::unique_ptr<uint8_t[]> output_message(new (std::nothrow) uint8_t[output_message_length]);
-  if (output_message == nullptr) {
-    ESP_LOGE(GCMEncryptionLog::TAG, "Failed to allocate memory for output buffer");
-    return std::vector<uint8_t>();
-  }
-  std::memcpy(output_message.get(), decrypted.get() + SECRET_LENGTH, output_message_length);
-
-  return std::vector<uint8_t>(output_message.get(), output_message.get() + output_message_length);
+  return std::vector<uint8_t>(decrypted.get() + SECRET_LENGTH, decrypted.get() + payload_length);
 }

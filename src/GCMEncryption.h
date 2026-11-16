@@ -4,6 +4,7 @@
 #ifndef __GCM_ENCRYPTION_H__
 #define __GCM_ENCRYPTION_H__
 
+#include <cstddef>
 #include <cstdint>
 #include <esp_err.h>
 #include <esp_idf_version.h>
@@ -21,20 +22,21 @@ const char TAG[] = "GCMEncryption";
 } // namespace GCMEncryptionLog
 
 /**
- * @brief Encrypt and decrypt byte arrays. Useful for sending encrypted data on things like ESP-NOW, 802.15.4 or other
- * protocols.
+ * @brief Encrypt and decrypt byte arrays using AES-128-GCM.
  */
 class GCMEncryption {
 public:
   /**
    * @brief Construct a new GCMEncryption object
    *
-   * @param key Encyption key used for our own packet encryption (GCM). Must be exact 16 bytes long. \0 does not count.
+   * @param key Encryption key used for AES-128-GCM. Must be exact 16 bytes long. \0 does not count.
    * @param secret Used to validate the integrity of the messages. We expect the decrypted payload to contain this
    * string. Must be exact 8 bytes long. \0 does not count.
-   * @param extended_size if true, maximum supported message length is 65510 bytes, else 231 bytes. Must be setup with
-   * the same size on both the sender and the reciving side. Reason for having this is for backward compatibility with
-   * existing users who expects the size to be 231 bytes.
+   * @param extended_size Selects between compact and extended/hardened packet formats. Must match on sender and
+   * receiver. When false, uses a compact 8-byte IV, 8-byte GCM tag, and 1-byte length field (max 230-byte message),
+   * suitable for transports with small maximum packet sizes (such as ESP-NOW or IEEE 802.15.4) and wire-compatible
+   * with earlier versions. When true, uses hardened GCM parameters (12-byte IV, 16-byte GCM tag) and a 2-byte length
+   * field (max 65497-byte message).
    */
   GCMEncryption(const char *key, const char *secret, bool extended_size = false);
   virtual ~GCMEncryption();
@@ -45,37 +47,39 @@ public:
    * This function encrypts the provided message and appends it after an encryption header.
    *
    * @param message Pointer to the message to encrypt.
-   * @param length Size of the message in bytes. The maximum supported message length is 65510 bytes if `extended_size`
-   * is set to true in the constructor, or 231 bytes if `extended_size` is false.
+   * @param length Size of the message in bytes. The maximum supported message length is 65497 bytes if `extended_size`
+   * is set to true in the constructor, or 230 bytes if `extended_size` is false.
    * @return A vector containing the encrypted message. This will be larger than the original message due to the added
    * encryption header and other metadata. Returns an empty vector on failure.
    *
-   * @note The minimal size of the encrypted vector is 34 bytes when `extended_size` is true, and 33 bytes when
-   * `extended_size` is false. If the message length is between 0 and 8 bytes, the encrypted vector size will remain
+   * @note The minimal size of the encrypted vector is 46 bytes when `extended_size` is true, and 33 bytes when
+   * `extended_size` is false. If the message length is between 1 and 8 bytes, the encrypted vector size will remain
    * at this minimal size. Starting from a message length of 9 bytes, the encrypted vector size will increase linearly
    * with the input message length.
    */
   const std::vector<uint8_t> encrypt(const void *message, const size_t length);
 
   /**
-   * @brief Decrypt an ecrypted message. This message is assumed to contain the Encryption Header.
+   * @brief Decrypt an encrypted message. This message is assumed to contain the Encryption Header.
    *
-   * @param message the message to decrypt.
-   * @return the decrypted message. This will be smaller then the original message. Empty vector on failure.
+   * @param message pointer to the message buffer to decrypt.
+   * @param length size of the message buffer in bytes.
+   * @return the decrypted message. This will be smaller than the original message. Empty vector on failure.
    */
-  const std::vector<uint8_t> decrypt(const void *message);
+  const std::vector<uint8_t> decrypt(const void *message, const size_t length);
 
   /**
-   * @brief Decrypt an ecrypted message. This message is assumed to contain the Encryption Header.
+   * @brief Decrypt an encrypted message. This message is assumed to contain the Encryption Header.
    *
    * @param message the message to decrypt.
-   * @return the decrypted message. This will be smaller then the original message. Empty vector on failure.
+   * @return the decrypted message. This will be smaller than the original message. Empty vector on failure.
    */
   const std::vector<uint8_t> decrypt(const std::vector<uint8_t> &message);
 
 private:
   const char *_secret;
   bool _extended_size;
+  bool _initialized = false;
   mbedtls_gcm_context _aes;
 };
 

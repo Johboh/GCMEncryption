@@ -1,13 +1,13 @@
 {
   "name": "GCMEncryption",
-  "keywords": "esp32, esp-now, ESP Now, now",
+  "keywords": "esp32, gcm, aes-gcm, encryption, security",
   "description": "Encrypt and decrypt payload using GCM.",
   "$schema": "https://raw.githubusercontent.com/platformio/platformio-core/develop/platformio/assets/schema/library.json",
   "authors":
   {
     "name": "Johan Böhlin"
   },
-  "version": "0.5.3",
+  "version": "1.0.0",
   "license": "GPL-3.0-or-later",
   "repository":
   {

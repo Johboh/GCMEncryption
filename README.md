@@ -5,7 +5,11 @@
 [![GitHub release](https://img.shields.io/github/release/Johboh/GCMEncryption.svg)](https://github.com/Johboh/GCMEncryption/releases)
 [![Clang-format](https://github.com/Johboh/GCMEncryption/actions/workflows/clang-format.yaml/badge.svg)](https://github.com/Johboh/GCMEncryption)
 
-Arduino (using Arduino IDE or PlatformIO) and ESP-IDF (using Espressif IoT Development Framework or PlatformIO) compatible library for encrypting and decrypting messages to be sent over protocols like ESP-NOW, 802.15.4 and similar.
+Arduino (using Arduino IDE or PlatformIO) and ESP-IDF (using Espressif IoT Development Framework or PlatformIO) compatible library for encrypting and decrypting byte arrays using AES-128-GCM.
+
+### Packet format & `extended_size`
+- `extended_size = false` (default): Uses a compact header (8-byte IV, 8-byte GCM tag, 1-byte length) with a max message length of 230 bytes. Intended for transports with small maximum packet sizes (such as ESP-NOW, IEEE 802.15.4, etc.) and remains wire-compatible with `0.x`.
+- `extended_size = true`: Uses hardened GCM parameters (12-byte IV, 16-byte GCM tag, 2-byte length) with a max message length of 65,497 bytes.
 
 ### Installation
 #### PlatformIO when using the Arduino framework:
@@ -19,7 +23,7 @@ In your existing `idf_component.yml` or in a new `idf_component.yml` in your `sr
 ```
 dependencies:
   johboh/gcmencryption:
-    version: ">=0.5.3"
+    version: ">=1.0.0"
 ```
 
 #### Arduino IDE:
@@ -30,7 +34,7 @@ In your existing `idf_component.yml` or in a new `idf_component.yml` next to you
 ```
 dependencies:
   johboh/gcmencryption:
-    version: ">=0.5.3"
+    version: ">=1.0.0"
 ```
 
 #### Arduino IDE:
