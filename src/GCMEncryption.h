@@ -11,6 +11,11 @@
 #include <memory>
 #include <vector>
 
+#if __has_include(<mutex>) && defined(__GTHREADS)
+#include <mutex>
+#define GCM_ENCRYPTION_HAS_MUTEX 1
+#endif
+
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(6, 0, 0)
 #include <mbedtls/esp_debug.h> // Weird, yes, don't know the correct include for 6.0.
 #else
@@ -77,10 +82,13 @@ public:
   const std::vector<uint8_t> decrypt(const std::vector<uint8_t> &message);
 
 private:
-  const char *_secret;
+  uint8_t _secret[8]{};
   bool _extended_size;
   bool _initialized = false;
   mbedtls_gcm_context _aes;
+#ifdef GCM_ENCRYPTION_HAS_MUTEX
+  std::mutex _mutex;
+#endif
 };
 
 #endif // __GCM_ENCRYPTION_H__

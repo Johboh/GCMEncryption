@@ -49,25 +49,46 @@ HeaderLayout getHeaderLayout(bool extended_size) {
   return {sizeof(GCMEncryptionHeader), sizeof(GCMEncryptionHeader::iv), sizeof(GCMEncryptionHeader::tag),
           sizeof(uint8_t), UINT8_MAX};
 }
+
+void secureZero(void *ptr, size_t len) {
+  volatile uint8_t *p = static_cast<volatile uint8_t *>(ptr);
+  while (len--) {
+    *p++ = 0;
+  }
+}
+
+struct ZeroOnExit {
+  void *ptr;
+  size_t len;
+  ~ZeroOnExit() {
+    if (ptr != nullptr && len > 0) {
+      secureZero(ptr, len);
+    }
+  }
+};
 } // namespace
 
-GCMEncryption::GCMEncryption(const char *key, const char *secret, bool extended_size)
-    : _secret(secret), _extended_size(extended_size) {
+GCMEncryption::GCMEncryption(const char *key, const char *secret, bool extended_size) : _extended_size(extended_size) {
   mbedtls_gcm_init(&_aes);
   if (key == nullptr || secret == nullptr) {
     ESP_LOGE(GCMEncryptionLog::TAG, "Key or secret is null");
     return;
   }
+  std::memcpy(_secret, secret, SECRET_LENGTH);
   int r =
       mbedtls_gcm_setkey(&_aes, MBEDTLS_CIPHER_ID_AES, reinterpret_cast<const unsigned char *>(key), KEY_SIZE_IN_BITS);
   if (r != 0) {
+    secureZero(_secret, sizeof(_secret));
     ESP_LOGE(GCMEncryptionLog::TAG, "Failed to set GCM key (error %d)", r);
     return;
   }
   _initialized = true;
 }
 
-GCMEncryption::~GCMEncryption() { mbedtls_gcm_free(&_aes); }
+GCMEncryption::~GCMEncryption() {
+  mbedtls_gcm_free(&_aes);
+  secureZero(_secret, sizeof(_secret));
+}
 
 const std::vector<uint8_t> GCMEncryption::encrypt(const void *input_message, const size_t input_length) {
   if (!_initialized) {
@@ -90,12 +111,6 @@ const std::vector<uint8_t> GCMEncryption::encrypt(const void *input_message, con
     return std::vector<uint8_t>();
   }
 
-  // Generate a random IV.
-  uint8_t header[sizeof(GCMEncryptionExtendedHeader)]{};
-  uint8_t *iv = header;
-  uint8_t *tag = header + layout.iv_size;
-  esp_fill_random(iv, layout.iv_size);
-
   // Total buffer to encrypt needs to be at least 16 bytes.
   // At the start of the buffer, we will include the _secret so we can
   // verify the integrity of the message.
@@ -105,11 +120,6 @@ const std::vector<uint8_t> GCMEncryption::encrypt(const void *input_message, con
   // We need at least 16 bytes, but we don't need a multiple of 16 bytes.
   // If smaller than 16, round up.
   uint16_t payload_length = std::max(static_cast<size_t>(16), total_length);
-  std::unique_ptr<uint8_t[]> encrypted(new (std::nothrow) uint8_t[payload_length]);
-  if (encrypted == nullptr) {
-    ESP_LOGE(GCMEncryptionLog::TAG, "Failed to allocate memory for encryption buffer");
-    return std::vector<uint8_t>();
-  }
 
   // Build the payload we want to encrypt by adding the secret first.
   // Then add the actual message. Zero-initialize so any padding up to 16 bytes is deterministic.
@@ -118,29 +128,32 @@ const std::vector<uint8_t> GCMEncryption::encrypt(const void *input_message, con
     ESP_LOGE(GCMEncryptionLog::TAG, "Failed to allocate memory for input buffer");
     return std::vector<uint8_t>();
   }
+  ZeroOnExit input_guard{input.get(), payload_length};
   std::memcpy(input.get(), _secret, SECRET_LENGTH);
   std::memcpy(input.get() + SECRET_LENGTH, input_message, input_length);
 
+  size_t wire_length = layout.header_size + layout.length_field_size + payload_length;
+  std::vector<uint8_t> wire_buffer(wire_length);
+  uint8_t *iv = wire_buffer.data();
+  uint8_t *tag = wire_buffer.data() + layout.iv_size;
+  uint8_t *encrypted = wire_buffer.data() + layout.header_size + layout.length_field_size;
+
+  // Generate a random IV.
+  esp_fill_random(iv, layout.iv_size);
+  std::memcpy(wire_buffer.data() + layout.header_size, &payload_length, layout.length_field_size);
+
+#ifdef GCM_ENCRYPTION_HAS_MUTEX
+  std::lock_guard<std::mutex> lock(_mutex);
+#endif
+
   int r = mbedtls_gcm_crypt_and_tag(&_aes, MBEDTLS_GCM_ENCRYPT, payload_length, iv, layout.iv_size, nullptr, 0,
-                                    input.get(), encrypted.get(), layout.tag_size, tag);
+                                    input.get(), encrypted, layout.tag_size, tag);
   if (r != 0) {
     ESP_LOGE(GCMEncryptionLog::TAG, "Failed to encrypt payload (error %d)", r);
     return std::vector<uint8_t>();
   }
 
-  // We now have our encrypted payload.
-  // We want to send the outer encryption header followed by the length and the encrypted payload.
-  size_t wire_length = layout.header_size + layout.length_field_size + payload_length;
-  std::unique_ptr<uint8_t[]> wire_buffer(new (std::nothrow) uint8_t[wire_length]);
-  if (wire_buffer == nullptr) {
-    ESP_LOGE(GCMEncryptionLog::TAG, "Failed to allocate memory for wire buffer");
-    return std::vector<uint8_t>();
-  }
-  std::memcpy(wire_buffer.get(), header, layout.header_size);
-  std::memcpy(wire_buffer.get() + layout.header_size, &payload_length, layout.length_field_size);
-  std::memcpy(wire_buffer.get() + layout.header_size + layout.length_field_size, encrypted.get(), payload_length);
-
-  return std::vector<uint8_t>(wire_buffer.get(), wire_buffer.get() + wire_length);
+  return wire_buffer;
 }
 
 const std::vector<uint8_t> GCMEncryption::decrypt(const std::vector<uint8_t> &input_message) {
@@ -196,10 +209,17 @@ const std::vector<uint8_t> GCMEncryption::decrypt(const void *input_message, con
     ESP_LOGE(GCMEncryptionLog::TAG, "Failed to allocate memory for decryption buffer");
     return std::vector<uint8_t>();
   }
+  ZeroOnExit decrypted_guard{decrypted.get(), payload_length};
   const uint8_t *encrypted = message_bytes + header_and_length_size;
 
-  int r = mbedtls_gcm_auth_decrypt(&_aes, payload_length, iv, layout.iv_size, nullptr, 0, tag, layout.tag_size,
-                                   encrypted, decrypted.get());
+  int r = 0;
+  {
+#ifdef GCM_ENCRYPTION_HAS_MUTEX
+    std::lock_guard<std::mutex> lock(_mutex);
+#endif
+    r = mbedtls_gcm_auth_decrypt(&_aes, payload_length, iv, layout.iv_size, nullptr, 0, tag, layout.tag_size, encrypted,
+                                 decrypted.get());
+  }
 
   if (r != 0) {
     ESP_LOGE(GCMEncryptionLog::TAG, "Failed to decrypt payload. Authentication tag or keys are invalid");
@@ -209,7 +229,7 @@ const std::vector<uint8_t> GCMEncryption::decrypt(const void *input_message, con
   // Verify secret in constant time. Its always first.
   uint8_t diff = 0;
   for (size_t i = 0; i < SECRET_LENGTH; i++) {
-    diff |= decrypted[i] ^ static_cast<uint8_t>(_secret[i]);
+    diff |= decrypted[i] ^ _secret[i];
   }
   if (diff != 0) {
     ESP_LOGE(GCMEncryptionLog::TAG, "Failed to decrypt payload. Secret is invalid");
