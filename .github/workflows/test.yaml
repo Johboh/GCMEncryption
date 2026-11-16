@@ -7,16 +7,28 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        version:
+          - name: v55_linux
+            version_number: release-v5.5
+          - name: v60_linux
+            version_number: release-v6.0
+          - name: v61_linux
+            version_number: release-v6.1
+
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install mbedTLS
-        run: sudo apt-get update && sudo apt-get install -y libmbedtls-dev
-
-      - name: Build and run unit tests (ASan + UBSan)
-        run: |
-          g++ -std=gnu++17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -pthread \
-            -Isrc -Itest/mocks \
-            src/impl/GCMEncryption.cpp test/test_gcm_encryption.cpp \
-            -lmbedtls -lmbedcrypto -o test_gcm
-          ./test_gcm
+      - name: Build and run ESP-IDF Linux tests
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: ${{ matrix.version.version_number }}
+          path: test
+          command: |
+            apt-get update && apt-get install -y --no-install-recommends build-essential libbsd-dev
+            unset IDF_TARGET
+            idf.py --preview set-target linux
+            idf.py build
+            ./build/gcm_encryption_tests.elf

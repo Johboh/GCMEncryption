@@ -2,13 +2,21 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include <GCMEncryption.h>
-#include <cassert>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
-#include <iostream>
 #include <memory>
 #include <string>
 #include <thread>
 #include <vector>
+
+#define TEST_ASSERT(cond)                                                                                              \
+  do {                                                                                                                 \
+    if (!(cond)) {                                                                                                     \
+      std::fprintf(stderr, "Assertion failed: %s (%s:%d)\n", #cond, __FILE__, __LINE__);                               \
+      std::abort();                                                                                                    \
+    }                                                                                                                  \
+  } while (0)
 
 namespace {
 
@@ -18,49 +26,49 @@ void testCompactRoundTripAndLimits(const char *key, const char *secret) {
   // Normal message round-trip via both decrypt overloads.
   const std::string msg = "Hello, encrypted world!";
   const auto enc = gcm.encrypt(msg.data(), msg.size());
-  assert(enc.size() == 16 + 1 + 8 + msg.size());
+  TEST_ASSERT(enc.size() == 16 + 1 + 8 + msg.size());
 
   const auto dec_vec = gcm.decrypt(enc);
-  assert(dec_vec.size() == msg.size());
-  assert(std::memcmp(dec_vec.data(), msg.data(), msg.size()) == 0);
+  TEST_ASSERT(dec_vec.size() == msg.size());
+  TEST_ASSERT(std::memcmp(dec_vec.data(), msg.data(), msg.size()) == 0);
 
   const auto dec_ptr = gcm.decrypt(enc.data(), enc.size());
-  assert(dec_ptr == dec_vec);
+  TEST_ASSERT(dec_ptr == dec_vec);
 
   // Trailing unauthenticated bytes beyond wire_length should still decrypt cleanly without OOB.
   auto padded = enc;
   padded.push_back(0xAA);
   padded.push_back(0xBB);
-  assert(gcm.decrypt(padded) == dec_vec);
+  TEST_ASSERT(gcm.decrypt(padded) == dec_vec);
 
   // Short messages (1..8 bytes) pad deterministically to minimal 33-byte wire packet and return 8 bytes.
   for (size_t len = 1; len <= 8; ++len) {
     std::vector<uint8_t> short_msg(len, static_cast<uint8_t>('A' + len));
     const auto short_enc = gcm.encrypt(short_msg.data(), short_msg.size());
-    assert(short_enc.size() == 33);
+    TEST_ASSERT(short_enc.size() == 33);
     const auto short_dec = gcm.decrypt(short_enc);
-    assert(short_dec.size() == 8);
-    assert(std::memcmp(short_dec.data(), short_msg.data(), len) == 0);
+    TEST_ASSERT(short_dec.size() == 8);
+    TEST_ASSERT(std::memcmp(short_dec.data(), short_msg.data(), len) == 0);
     for (size_t i = len; i < 8; ++i) {
-      assert(short_dec[i] == 0);
+      TEST_ASSERT(short_dec[i] == 0);
     }
   }
 
   // 9-byte message grows linearly: 16 header + 1 length + 8 secret + 9 msg = 34 bytes.
   const std::vector<uint8_t> nine_bytes(9, 0x55);
   const auto nine_enc = gcm.encrypt(nine_bytes.data(), nine_bytes.size());
-  assert(nine_enc.size() == 34);
-  assert(gcm.decrypt(nine_enc) == nine_bytes);
+  TEST_ASSERT(nine_enc.size() == 34);
+  TEST_ASSERT(gcm.decrypt(nine_enc) == nine_bytes);
 
   // Maximum compact payload size: 230 bytes -> 255 bytes on wire.
   const std::vector<uint8_t> max_payload(230, 0x3C);
   const auto max_enc = gcm.encrypt(max_payload.data(), max_payload.size());
-  assert(max_enc.size() == 255);
-  assert(gcm.decrypt(max_enc) == max_payload);
+  TEST_ASSERT(max_enc.size() == 255);
+  TEST_ASSERT(gcm.decrypt(max_enc) == max_payload);
 
   // Exceeding maximum compact payload size (231 bytes) must fail.
   const std::vector<uint8_t> over_max(231, 0x3C);
-  assert(gcm.encrypt(over_max.data(), over_max.size()).empty());
+  TEST_ASSERT(gcm.encrypt(over_max.data(), over_max.size()).empty());
 }
 
 void testExtendedRoundTripAndLimits(const char *key, const char *secret) {
@@ -69,12 +77,12 @@ void testExtendedRoundTripAndLimits(const char *key, const char *secret) {
   // Short message (1..8 bytes) produces minimal 46-byte wire packet (12 IV + 16 tag + 2 len + 16 min payload).
   const std::string short_msg = "Hi";
   const auto short_enc = gcm.encrypt(short_msg.data(), short_msg.size());
-  assert(short_enc.size() == 46);
+  TEST_ASSERT(short_enc.size() == 46);
   const auto short_dec = gcm.decrypt(short_enc);
-  assert(short_dec.size() == 8);
-  assert(short_dec[0] == 'H' && short_dec[1] == 'i');
+  TEST_ASSERT(short_dec.size() == 8);
+  TEST_ASSERT(short_dec[0] == 'H' && short_dec[1] == 'i');
   for (size_t i = 2; i < 8; ++i) {
-    assert(short_dec[i] == 0);
+    TEST_ASSERT(short_dec[i] == 0);
   }
 
   // Medium payload (> 255 bytes).
@@ -83,18 +91,18 @@ void testExtendedRoundTripAndLimits(const char *key, const char *secret) {
     medium[i] = static_cast<uint8_t>(i & 0xFF);
   }
   const auto med_enc = gcm.encrypt(medium.data(), medium.size());
-  assert(med_enc.size() == 28 + 2 + 8 + medium.size());
-  assert(gcm.decrypt(med_enc) == medium);
+  TEST_ASSERT(med_enc.size() == 28 + 2 + 8 + medium.size());
+  TEST_ASSERT(gcm.decrypt(med_enc) == medium);
 
   // Maximum extended payload size: 65497 bytes -> 65535 bytes on wire.
   const std::vector<uint8_t> max_payload(65497, 0x7A);
   const auto max_enc = gcm.encrypt(max_payload.data(), max_payload.size());
-  assert(max_enc.size() == 65535);
-  assert(gcm.decrypt(max_enc) == max_payload);
+  TEST_ASSERT(max_enc.size() == 65535);
+  TEST_ASSERT(gcm.decrypt(max_enc) == max_payload);
 
   // Exceeding maximum extended payload size (65498 bytes) must fail.
   const std::vector<uint8_t> over_max(65498, 0x7A);
-  assert(gcm.encrypt(over_max.data(), over_max.size()).empty());
+  TEST_ASSERT(gcm.encrypt(over_max.data(), over_max.size()).empty());
 }
 
 void testCrossModeMismatch(const char *key, const char *secret) {
@@ -105,10 +113,10 @@ void testCrossModeMismatch(const char *key, const char *secret) {
   const auto compact_enc = compact.encrypt(msg.data(), msg.size());
   const auto extended_enc = extended.encrypt(msg.data(), msg.size());
 
-  assert(!compact_enc.empty());
-  assert(!extended_enc.empty());
-  assert(extended.decrypt(compact_enc).empty());
-  assert(compact.decrypt(extended_enc).empty());
+  TEST_ASSERT(!compact_enc.empty());
+  TEST_ASSERT(!extended_enc.empty());
+  TEST_ASSERT(extended.decrypt(compact_enc).empty());
+  TEST_ASSERT(compact.decrypt(extended_enc).empty());
 }
 
 void testAuthenticationAndBoundsChecks(const char *key, const char *secret, bool extended_size) {
@@ -120,20 +128,20 @@ void testAuthenticationAndBoundsChecks(const char *key, const char *secret, bool
 
   const std::string msg = "Authenticated payload 0123456789";
   const auto enc = gcm.encrypt(msg.data(), msg.size());
-  assert(!enc.empty());
+  TEST_ASSERT(!enc.empty());
 
   // Flip every byte in IV -> must fail.
   for (size_t i = 0; i < iv_size; ++i) {
     auto tampered = enc;
     tampered[i] ^= 0x01;
-    assert(gcm.decrypt(tampered).empty());
+    TEST_ASSERT(gcm.decrypt(tampered).empty());
   }
 
   // Flip every byte in GCM tag -> must fail.
   for (size_t i = 0; i < tag_size; ++i) {
     auto tampered = enc;
     tampered[iv_size + i] ^= 0x80;
-    assert(gcm.decrypt(tampered).empty());
+    TEST_ASSERT(gcm.decrypt(tampered).empty());
   }
 
   // Flip ciphertext byte in _secret prefix and in message body -> must fail, and input buffer must not be mutated.
@@ -142,26 +150,26 @@ void testAuthenticationAndBoundsChecks(const char *key, const char *secret, bool
     auto tampered = enc;
     tampered[i] ^= 0x01;
     const auto snapshot = tampered;
-    assert(gcm.decrypt(tampered.data(), tampered.size()).empty());
-    assert(tampered == snapshot);
+    TEST_ASSERT(gcm.decrypt(tampered.data(), tampered.size()).empty());
+    TEST_ASSERT(tampered == snapshot);
   }
 
   // Zeroed tag on valid ciphertext -> must fail.
   {
     auto zero_tag = enc;
     std::memset(zero_tag.data() + iv_size, 0, tag_size);
-    assert(gcm.decrypt(zero_tag).empty());
+    TEST_ASSERT(gcm.decrypt(zero_tag).empty());
   }
 
   // Wrong key -> must fail.
   const char wrong_key[] = "FEDCBA9876543210";
   GCMEncryption wrong_key_gcm(wrong_key, secret, extended_size);
-  assert(wrong_key_gcm.decrypt(enc).empty());
+  TEST_ASSERT(wrong_key_gcm.decrypt(enc).empty());
 
   // Same key, wrong secret -> tag succeeds at GCM layer, secret check must reject.
   const char wrong_secret[] = "76543210";
   GCMEncryption wrong_secret_gcm(key, wrong_secret, extended_size);
-  assert(wrong_secret_gcm.decrypt(enc).empty());
+  TEST_ASSERT(wrong_secret_gcm.decrypt(enc).empty());
 
   // Oversized payload_length field -> must fail cleanly without OOB read.
   auto oversized = enc;
@@ -169,7 +177,7 @@ void testAuthenticationAndBoundsChecks(const char *key, const char *secret, bool
   if (extended_size) {
     oversized[header_size + 1] = 0xFF;
   }
-  assert(gcm.decrypt(oversized).empty());
+  TEST_ASSERT(gcm.decrypt(oversized).empty());
 
   // Off-by-one payload_length (claims 1 byte more than buffer provides) -> must fail without OOB read.
   {
@@ -177,7 +185,7 @@ void testAuthenticationAndBoundsChecks(const char *key, const char *secret, bool
     const size_t remaining = off_by_one.size() - ct_offset;
     const uint16_t claimed = static_cast<uint16_t>(remaining + 1);
     std::memcpy(off_by_one.data() + header_size, &claimed, len_size);
-    assert(gcm.decrypt(off_by_one).empty());
+    TEST_ASSERT(gcm.decrypt(off_by_one).empty());
   }
 
   // Undersized payload_length field (<= SECRET_LENGTH) -> must fail.
@@ -187,12 +195,12 @@ void testAuthenticationAndBoundsChecks(const char *key, const char *secret, bool
     if (extended_size) {
       undersized[header_size + 1] = 0;
     }
-    assert(gcm.decrypt(undersized).empty());
+    TEST_ASSERT(gcm.decrypt(undersized).empty());
   }
 
   // Truncated inputs for every length < enc.size() -> must fail cleanly.
   for (size_t trunc = 0; trunc < enc.size(); ++trunc) {
-    assert(gcm.decrypt(enc.data(), trunc).empty());
+    TEST_ASSERT(gcm.decrypt(enc.data(), trunc).empty());
   }
 }
 
@@ -200,7 +208,8 @@ void testWireFormatCompatibilityWithMbedtls(const char *key, const char *secret)
   // Verify compact (0.x) wire format matches raw mbedTLS AES-128-GCM (8-byte IV, 8-byte tag, 1-byte length).
   mbedtls_gcm_context raw_ctx;
   mbedtls_gcm_init(&raw_ctx);
-  assert(mbedtls_gcm_setkey(&raw_ctx, MBEDTLS_CIPHER_ID_AES, reinterpret_cast<const unsigned char *>(key), 128) == 0);
+  TEST_ASSERT(mbedtls_gcm_setkey(&raw_ctx, MBEDTLS_CIPHER_ID_AES, reinterpret_cast<const unsigned char *>(key), 128) ==
+              0);
 
   const std::string msg = "Wire compat check";
   uint8_t iv[8] = {1, 2, 3, 4, 5, 6, 7, 8};
@@ -210,8 +219,8 @@ void testWireFormatCompatibilityWithMbedtls(const char *key, const char *secret)
   std::memcpy(pt.data() + 8, msg.data(), msg.size());
   std::vector<uint8_t> ct(pt.size());
 
-  assert(mbedtls_gcm_crypt_and_tag(&raw_ctx, MBEDTLS_GCM_ENCRYPT, pt.size(), iv, sizeof(iv), nullptr, 0, pt.data(),
-                                   ct.data(), sizeof(tag), tag) == 0);
+  TEST_ASSERT(mbedtls_gcm_crypt_and_tag(&raw_ctx, MBEDTLS_GCM_ENCRYPT, pt.size(), iv, sizeof(iv), nullptr, 0, pt.data(),
+                                        ct.data(), sizeof(tag), tag) == 0);
 
   std::vector<uint8_t> legacy_wire;
   legacy_wire.insert(legacy_wire.end(), iv, iv + sizeof(iv));
@@ -221,32 +230,32 @@ void testWireFormatCompatibilityWithMbedtls(const char *key, const char *secret)
 
   GCMEncryption compact(key, secret, false);
   const auto dec = compact.decrypt(legacy_wire);
-  assert(dec.size() == msg.size());
-  assert(std::memcmp(dec.data(), msg.data(), msg.size()) == 0);
+  TEST_ASSERT(dec.size() == msg.size());
+  TEST_ASSERT(std::memcmp(dec.data(), msg.data(), msg.size()) == 0);
 
   // Also verify compact.encrypt() can be decrypted by raw mbedtls_gcm_auth_decrypt.
   const auto enc = compact.encrypt(msg.data(), msg.size());
-  assert(enc.size() == 16 + 1 + 8 + msg.size());
+  TEST_ASSERT(enc.size() == 16 + 1 + 8 + msg.size());
   const uint8_t enc_len = enc[16];
-  assert(enc_len == 8 + msg.size());
+  TEST_ASSERT(enc_len == 8 + msg.size());
   std::vector<uint8_t> raw_pt(enc_len);
-  assert(mbedtls_gcm_auth_decrypt(&raw_ctx, enc_len, enc.data(), 8, nullptr, 0, enc.data() + 8, 8, enc.data() + 17,
-                                  raw_pt.data()) == 0);
-  assert(std::memcmp(raw_pt.data(), secret, 8) == 0);
-  assert(std::memcmp(raw_pt.data() + 8, msg.data(), msg.size()) == 0);
+  TEST_ASSERT(mbedtls_gcm_auth_decrypt(&raw_ctx, enc_len, enc.data(), 8, nullptr, 0, enc.data() + 8, 8, enc.data() + 17,
+                                       raw_pt.data()) == 0);
+  TEST_ASSERT(std::memcmp(raw_pt.data(), secret, 8) == 0);
+  TEST_ASSERT(std::memcmp(raw_pt.data() + 8, msg.data(), msg.size()) == 0);
 
   // Also verify extended.encrypt() uses 12-byte IV, 16-byte tag, and 2-byte length via raw mbedtls_gcm_auth_decrypt.
   GCMEncryption extended(key, secret, true);
   const auto ext_enc = extended.encrypt(msg.data(), msg.size());
-  assert(ext_enc.size() == 28 + 2 + 8 + msg.size());
+  TEST_ASSERT(ext_enc.size() == 28 + 2 + 8 + msg.size());
   uint16_t ext_len = 0;
   std::memcpy(&ext_len, ext_enc.data() + 28, sizeof(uint16_t));
-  assert(ext_len == 8 + msg.size());
+  TEST_ASSERT(ext_len == 8 + msg.size());
   std::vector<uint8_t> ext_raw_pt(ext_len);
-  assert(mbedtls_gcm_auth_decrypt(&raw_ctx, ext_len, ext_enc.data(), 12, nullptr, 0, ext_enc.data() + 12, 16,
-                                  ext_enc.data() + 30, ext_raw_pt.data()) == 0);
-  assert(std::memcmp(ext_raw_pt.data(), secret, 8) == 0);
-  assert(std::memcmp(ext_raw_pt.data() + 8, msg.data(), msg.size()) == 0);
+  TEST_ASSERT(mbedtls_gcm_auth_decrypt(&raw_ctx, ext_len, ext_enc.data(), 12, nullptr, 0, ext_enc.data() + 12, 16,
+                                       ext_enc.data() + 30, ext_raw_pt.data()) == 0);
+  TEST_ASSERT(std::memcmp(ext_raw_pt.data(), secret, 8) == 0);
+  TEST_ASSERT(std::memcmp(ext_raw_pt.data() + 8, msg.data(), msg.size()) == 0);
 
   mbedtls_gcm_free(&raw_ctx);
 }
@@ -254,21 +263,21 @@ void testWireFormatCompatibilityWithMbedtls(const char *key, const char *secret)
 void testLifecycleAndEdgeCases(const char *key, const char *secret) {
   // Invalid constructor args fail closed.
   GCMEncryption null_key(nullptr, secret);
-  assert(null_key.encrypt("abc", 3).empty());
-  assert(null_key.decrypt("abc", 3).empty());
+  TEST_ASSERT(null_key.encrypt("abc", 3).empty());
+  TEST_ASSERT(null_key.decrypt("abc", 3).empty());
 
   GCMEncryption null_secret(key, nullptr);
-  assert(null_secret.encrypt("abc", 3).empty());
-  assert(null_secret.decrypt("abc", 3).empty());
+  TEST_ASSERT(null_secret.encrypt("abc", 3).empty());
+  TEST_ASSERT(null_secret.decrypt("abc", 3).empty());
 
   // Invalid encrypt / decrypt arguments.
   GCMEncryption gcm(key, secret);
-  assert(gcm.encrypt(nullptr, 5).empty());
-  assert(gcm.encrypt("abc", 0).empty());
-  assert(gcm.decrypt(nullptr, 40).empty());
-  assert(gcm.decrypt(std::vector<uint8_t>()).empty());
+  TEST_ASSERT(gcm.encrypt(nullptr, 5).empty());
+  TEST_ASSERT(gcm.encrypt("abc", 0).empty());
+  TEST_ASSERT(gcm.decrypt(nullptr, 40).empty());
+  TEST_ASSERT(gcm.decrypt(std::vector<uint8_t>()).empty());
 
-  // Heap-allocated key and secret freed immediately after construction (catches dangling pointers under ASan).
+  // Heap-allocated key and secret freed immediately after construction (catches dangling pointers).
   std::unique_ptr<GCMEncryption> heap_owned;
   {
     auto heap_key = std::make_unique<char[]>(17);
@@ -282,11 +291,11 @@ void testLifecycleAndEdgeCases(const char *key, const char *secret) {
   const std::string msg = "Owned secret";
   const auto enc1 = heap_owned->encrypt(msg.data(), msg.size());
   const auto enc2 = heap_owned->encrypt(msg.data(), msg.size());
-  assert(!enc1.empty() && !enc2.empty());
-  assert(enc1 != enc2); // Random IVs produce distinct ciphertexts.
+  TEST_ASSERT(!enc1.empty() && !enc2.empty());
+  TEST_ASSERT(enc1 != enc2); // Random IVs produce distinct ciphertexts.
   const auto dec1 = heap_owned->decrypt(enc1);
-  assert(dec1.size() == msg.size());
-  assert(std::memcmp(dec1.data(), msg.data(), msg.size()) == 0);
+  TEST_ASSERT(dec1.size() == msg.size());
+  TEST_ASSERT(std::memcmp(dec1.data(), msg.data(), msg.size()) == 0);
 
   // Concurrent encrypt/decrypt across threads on a shared instance.
   std::vector<std::thread> workers;
@@ -295,10 +304,10 @@ void testLifecycleAndEdgeCases(const char *key, const char *secret) {
       for (int i = 0; i < 50; ++i) {
         const std::string payload = "thread-" + std::to_string(t) + "-msg-" + std::to_string(i);
         const auto c = heap_owned->encrypt(payload.data(), payload.size());
-        assert(!c.empty());
+        TEST_ASSERT(!c.empty());
         const auto p = heap_owned->decrypt(c);
-        assert(p.size() == payload.size());
-        assert(std::memcmp(p.data(), payload.data(), payload.size()) == 0);
+        TEST_ASSERT(p.size() == payload.size());
+        TEST_ASSERT(std::memcmp(p.data(), payload.data(), payload.size()) == 0);
       }
     });
   }
@@ -309,7 +318,11 @@ void testLifecycleAndEdgeCases(const char *key, const char *secret) {
 
 } // namespace
 
-int main() {
+extern "C" {
+void app_main();
+}
+
+void app_main(void) {
   const char key[] = "0123456789ABCDEF";
   const char secret[] = "01234567";
 
@@ -321,6 +334,5 @@ int main() {
   testWireFormatCompatibilityWithMbedtls(key, secret);
   testLifecycleAndEdgeCases(key, secret);
 
-  std::cout << "All GCMEncryption tests passed.\n";
-  return 0;
+  std::printf("All GCMEncryption tests passed.\n");
 }
