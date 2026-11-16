@@ -46,8 +46,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Remove arduino examples and library related files
-        run: rm -rf examples/arduino library.json library.properties
+      - name: Remove non-component files
+        run: rm -rf examples/arduino library.json library.properties test
 
       - name: Remove github actions
         run: rm -rf .github

@@ -1,0 +1,22 @@
+name: Unit Tests
+on:
+  workflow_call:
+  push:
+    branches:
+      - '**'
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install mbedTLS
+        run: sudo apt-get update && sudo apt-get install -y libmbedtls-dev
+
+      - name: Build and run unit tests (ASan + UBSan)
+        run: |
+          g++ -std=gnu++17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -pthread \
+            -Isrc -Itest/mocks \
+            src/impl/GCMEncryption.cpp test/test_gcm_encryption.cpp \
+            -lmbedtls -lmbedcrypto -o test_gcm
+          ./test_gcm
