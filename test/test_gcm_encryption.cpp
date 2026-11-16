@@ -5,6 +5,7 @@
 #include <cassert>
 #include <cstring>
 #include <iostream>
+#include <memory>
 #include <string>
 #include <thread>
 #include <vector>
@@ -135,12 +136,21 @@ void testAuthenticationAndBoundsChecks(const char *key, const char *secret, bool
     assert(gcm.decrypt(tampered).empty());
   }
 
-  // Flip ciphertext byte in _secret prefix and in message body -> must fail.
+  // Flip ciphertext byte in _secret prefix and in message body -> must fail, and input buffer must not be mutated.
   const size_t ct_offset = header_size + len_size;
   for (size_t i = ct_offset; i < enc.size(); ++i) {
     auto tampered = enc;
     tampered[i] ^= 0x01;
-    assert(gcm.decrypt(tampered).empty());
+    const auto snapshot = tampered;
+    assert(gcm.decrypt(tampered.data(), tampered.size()).empty());
+    assert(tampered == snapshot);
+  }
+
+  // Zeroed tag on valid ciphertext -> must fail.
+  {
+    auto zero_tag = enc;
+    std::memset(zero_tag.data() + iv_size, 0, tag_size);
+    assert(gcm.decrypt(zero_tag).empty());
   }
 
   // Wrong key -> must fail.
@@ -160,6 +170,15 @@ void testAuthenticationAndBoundsChecks(const char *key, const char *secret, bool
     oversized[header_size + 1] = 0xFF;
   }
   assert(gcm.decrypt(oversized).empty());
+
+  // Off-by-one payload_length (claims 1 byte more than buffer provides) -> must fail without OOB read.
+  {
+    auto off_by_one = enc;
+    const size_t remaining = off_by_one.size() - ct_offset;
+    const uint16_t claimed = static_cast<uint16_t>(remaining + 1);
+    std::memcpy(off_by_one.data() + header_size, &claimed, len_size);
+    assert(gcm.decrypt(off_by_one).empty());
+  }
 
   // Undersized payload_length field (<= SECRET_LENGTH) -> must fail.
   for (uint8_t bad_len : {uint8_t(0), uint8_t(1), uint8_t(8)}) {
@@ -216,6 +235,19 @@ void testWireFormatCompatibilityWithMbedtls(const char *key, const char *secret)
   assert(std::memcmp(raw_pt.data(), secret, 8) == 0);
   assert(std::memcmp(raw_pt.data() + 8, msg.data(), msg.size()) == 0);
 
+  // Also verify extended.encrypt() uses 12-byte IV, 16-byte tag, and 2-byte length via raw mbedtls_gcm_auth_decrypt.
+  GCMEncryption extended(key, secret, true);
+  const auto ext_enc = extended.encrypt(msg.data(), msg.size());
+  assert(ext_enc.size() == 28 + 2 + 8 + msg.size());
+  uint16_t ext_len = 0;
+  std::memcpy(&ext_len, ext_enc.data() + 28, sizeof(uint16_t));
+  assert(ext_len == 8 + msg.size());
+  std::vector<uint8_t> ext_raw_pt(ext_len);
+  assert(mbedtls_gcm_auth_decrypt(&raw_ctx, ext_len, ext_enc.data(), 12, nullptr, 0, ext_enc.data() + 12, 16,
+                                  ext_enc.data() + 30, ext_raw_pt.data()) == 0);
+  assert(std::memcmp(ext_raw_pt.data(), secret, 8) == 0);
+  assert(std::memcmp(ext_raw_pt.data() + 8, msg.data(), msg.size()) == 0);
+
   mbedtls_gcm_free(&raw_ctx);
 }
 
@@ -236,28 +268,35 @@ void testLifecycleAndEdgeCases(const char *key, const char *secret) {
   assert(gcm.decrypt(nullptr, 40).empty());
   assert(gcm.decrypt(std::vector<uint8_t>()).empty());
 
-  // Temporary secret buffer overwritten after construction.
-  char temp_secret[9] = "TEMPSEC1";
-  GCMEncryption own_secret(key, temp_secret, true);
-  std::memset(temp_secret, 0, sizeof(temp_secret));
+  // Heap-allocated key and secret freed immediately after construction (catches dangling pointers under ASan).
+  std::unique_ptr<GCMEncryption> heap_owned;
+  {
+    auto heap_key = std::make_unique<char[]>(17);
+    auto heap_secret = std::make_unique<char[]>(9);
+    std::memcpy(heap_key.get(), "HEAPKEY012345678", 16);
+    std::memcpy(heap_secret.get(), "HEAPSEC1", 8);
+    heap_owned = std::make_unique<GCMEncryption>(heap_key.get(), heap_secret.get(), true);
+    std::memset(heap_key.get(), 0xFF, 16);
+    std::memset(heap_secret.get(), 0xFF, 8);
+  }
   const std::string msg = "Owned secret";
-  const auto enc1 = own_secret.encrypt(msg.data(), msg.size());
-  const auto enc2 = own_secret.encrypt(msg.data(), msg.size());
+  const auto enc1 = heap_owned->encrypt(msg.data(), msg.size());
+  const auto enc2 = heap_owned->encrypt(msg.data(), msg.size());
   assert(!enc1.empty() && !enc2.empty());
   assert(enc1 != enc2); // Random IVs produce distinct ciphertexts.
-  const auto dec1 = own_secret.decrypt(enc1);
+  const auto dec1 = heap_owned->decrypt(enc1);
   assert(dec1.size() == msg.size());
   assert(std::memcmp(dec1.data(), msg.data(), msg.size()) == 0);
 
   // Concurrent encrypt/decrypt across threads on a shared instance.
   std::vector<std::thread> workers;
   for (int t = 0; t < 4; ++t) {
-    workers.emplace_back([&own_secret, t]() {
+    workers.emplace_back([&heap_owned, t]() {
       for (int i = 0; i < 50; ++i) {
         const std::string payload = "thread-" + std::to_string(t) + "-msg-" + std::to_string(i);
-        const auto c = own_secret.encrypt(payload.data(), payload.size());
+        const auto c = heap_owned->encrypt(payload.data(), payload.size());
         assert(!c.empty());
-        const auto p = own_secret.decrypt(c);
+        const auto p = heap_owned->decrypt(c);
         assert(p.size() == payload.size());
         assert(std::memcmp(p.data(), payload.data(), payload.size()) == 0);
       }

@@ -4,6 +4,7 @@
 [![Arduino IDE](https://github.com/Johboh/GCMEncryption/actions/workflows/arduino_cli.yaml/badge.svg)](https://downloads.arduino.cc/libraries/logs/github.com/Johboh/GCMEncryption/)
 [![GitHub release](https://img.shields.io/github/release/Johboh/GCMEncryption.svg)](https://github.com/Johboh/GCMEncryption/releases)
 [![Clang-format](https://github.com/Johboh/GCMEncryption/actions/workflows/clang-format.yaml/badge.svg)](https://github.com/Johboh/GCMEncryption)
+[![Unit Tests](https://github.com/Johboh/GCMEncryption/actions/workflows/test.yaml/badge.svg)](https://github.com/Johboh/GCMEncryption/actions/workflows/test.yaml)
 
 Arduino (using Arduino IDE or PlatformIO) and ESP-IDF (using Espressif IoT Development Framework or PlatformIO) compatible library for encrypting and decrypting byte arrays using AES-128-GCM.
 
