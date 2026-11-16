@@ -335,4 +335,6 @@ void app_main(void) {
   testLifecycleAndEdgeCases(key, secret);
 
   std::printf("All GCMEncryption tests passed.\n");
+  std::fflush(stdout);
+  std::exit(0);
 }
